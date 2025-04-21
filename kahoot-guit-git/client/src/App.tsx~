@@ -1,0 +1,393 @@
+import React, {useState, useRef, useEffect} from 'react';
+import "./App.css";
+import ParticlesBackground from "./ParticlesBackground.tsx";
+
+function App() {
+    const [statusText, setStatusText] = useState("Kahoot flooder launched.\n");
+    const [botName, setBotName] = useState("");
+    const [gamePin, setGamePin] = useState("");
+    const [botCount, setBotCount] = useState(5);
+    const [joinDelay, setJoinDelay] = useState(200);
+    const [showConsole, setShowConsole] = useState(true);
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [namingOption, setNamingOption] = useState("prefix-number");
+    const [nameList, setNameList] = useState("");
+    const [hydraEnabled, setHydraEnabled] = useState(false);
+    const [hydraAmount, setHydraAmount] = useState(0);
+    const statusRef = useRef<HTMLTextAreaElement>(null);
+    const wsRef = useRef<WebSocket | null>(null);
+
+    useEffect(() => {
+        if (statusRef.current) {
+            statusRef.current.scrollTop = statusRef.current.scrollHeight;
+        }
+    }, [statusText]);
+    useEffect(() => {
+        return () => {
+            wsRef.current?.close();
+        };
+    }, []);
+
+    const appendStatus = (text: string) => {
+        setStatusText((prev) => prev + text + "\n");
+    };
+    const handleStop = () => {
+        wsRef.current?.send(JSON.stringify({ action: "stop" }));
+    };
+    const handleLeave = () => {
+        wsRef.current?.send(JSON.stringify({ action: "leave" }));
+    };
+    const generateGenericNames = async () => {
+        try {
+            if (!botCount || botCount <= 0) {
+                appendStatus("Invalid bot count");
+                return;
+            }
+
+            const response = await fetch('names.txt');
+            if (!response.ok) {
+                appendStatus("Failed to load names.txt");
+                return;
+            }
+
+            const namesText = await response.text();
+            const allNames = namesText.split('\n').map(name => name.trim()).filter(Boolean);
+            const shuffled = [...allNames].sort(() => Math.random() - 0.5);
+            const selected = shuffled.slice(0, botCount);
+
+            setNameList(selected.join('\n'));
+        } catch (error) {
+            appendStatus("Error generating name list.");
+            setNameList("");
+        }
+    };
+    const generateKahootNames = async () => {
+        const url = 'https://apis.kahoot.it/namerator';
+        try {
+            if (!botCount || botCount <= 0) {
+                appendStatus("Invalid bot count");
+                return;
+            }
+            const requests = Array.from({ length: botCount }, () => fetch(url).then(res => res.json()));
+            const responses = await Promise.all(requests);
+            const names = responses.map(res => res.name);
+            setNameList(names.join('\n'));
+        } catch (error) {
+            appendStatus("Error grabbing names from Namerator API.");
+            setNameList("");
+        }
+    };
+    const generateFunnyNames = () => {
+        try {
+            if (!botCount || botCount <= 0) {
+                console.error("Invalid bot count");
+                return;
+            }
+            const prefixes = [
+                "Sus", "Drip", "Chad", "Shrek", "Noob", "UwU", "Cringe", "Sir", "Lil", "Mega",
+                "Sussy", "Among", "Big", "Quantum", "Waffle", "Sad", "Angry", "Karen", "Rizz", "Obamna"
+            ];
+            const suffixes = [
+                "Goblin", "McNugget", "Destroyer", "69", "theThird", "Lover", "Eater", "XD", "Gamer",
+                "Rebooted", "Ligma", "Vibes", "Toaster", "Zoomer", "NPC", "Rager", "Farter", "BeastMode"
+            ];
+
+            const names = Array(botCount).fill(0).map(() => {
+                const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+                const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+                return `${prefix}${suffix}`;
+            });
+            setNameList(names.join("\n"));
+        } catch (error) {
+            appendStatus("Error generating funny name list.");
+            setNameList("");
+        }
+    };
+    const handleSubmitLaunch = (e: React.FormEvent) => {
+        e.preventDefault();
+
+        appendStatus("Selected Option: " + namingOption);
+
+        let finalBotCount = botCount;
+
+        // If using name-list, override bot count with actual number of names
+        if (namingOption === "name-list") {
+            const names = nameList
+                .split("\n")
+                .map(name => name.trim())
+                .filter(Boolean);
+            finalBotCount = names.length;
+
+            if (finalBotCount === 0) {
+                appendStatus("No valid names provided in name list.");
+                return;
+            }
+        }
+
+        if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+            wsRef.current = new WebSocket('ws://localhost:3001');
+            wsRef.current.onopen = () => {
+                appendStatus("Connected to websocket server!");
+
+                wsRef.current?.send(JSON.stringify({
+                    action: "join",
+                    gamePin,
+                    botName,
+                    botCount: finalBotCount,
+                    joinSpeed: joinDelay,
+                    namingOption,
+                    nameList,
+                    hydra: { enabled: hydraEnabled, amount: hydraAmount }
+                }));
+                appendStatus(`Started spawning ${finalBotCount} bots to game PIN ${gamePin}`);
+            };
+
+            wsRef.current.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                appendStatus("Received message: " + JSON.stringify(data));
+                switch (data.type) {
+                    case "status": appendStatus(data.message); break;
+                    case "error": appendStatus(`ERROR: ${data.message}`); break;
+                    default: appendStatus(event.data);
+                }
+            };
+
+            wsRef.current.onerror = (error) => appendStatus(`WebSocket error: ${error}`);
+            wsRef.current.onclose = () => appendStatus("Disconnected from bot server");
+
+        } else if (wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                action: "join",
+                gamePin,
+                botName,
+                botCount: finalBotCount,
+                joinSpeed: joinDelay,
+                namingOption,
+                nameList,
+                hydra: { enabled: hydraEnabled, amount: hydraAmount }
+            }));
+            appendStatus(`Started spawning ${finalBotCount} bots to game PIN ${gamePin}`);
+        } else {
+            appendStatus("Connecting... Please wait and try again.");
+        }
+    };
+
+    return (
+        <>
+        {/* Keep background separate so it doesn't re-render */}
+        <ParticlesBackground />
+
+        <div className="app-container">
+            <header className="app-header">
+                <h1 className="app-title">Kahoot Flooder</h1>
+                <p className="app-subtitle">Mass join Kahoot games with ease</p>
+            </header>
+
+            <main className="app-main">
+                <form onSubmit={handleSubmitLaunch} className="join-form">
+                    <div className="form-group">
+                        <label className="form-label">Bot Name:</label>
+                        <input
+                            type="text"
+                            className="form-input"
+                            placeholder="e.g. TestUser"
+                            value={botName}
+                            onChange={(e) => setBotName(e.target.value)}
+                            required
+                            disabled={namingOption === "name-list"}
+                        />
+                    </div>
+
+                    <div className="form-group">
+                        <label className="form-label">Game PIN:</label>
+                        <input
+                            type="number"
+                            className="form-input"
+                            placeholder="e.g. 123456"
+                            value={gamePin}
+                            onChange={(e) => setGamePin(e.target.value)}
+                            required
+                        />
+                    </div>
+
+                    <div className="form-row">
+                        <div className="form-group">
+                            <label className="form-label">Bot Count:</label>
+                            <input
+                                type="number"
+                                className="form-input"
+                                min={1}
+                                max={500}
+                                value={botCount}
+                                onChange={(e) => setBotCount(Number(e.target.value))}
+                                required
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Join Delay (ms):</label>
+                            <input
+                                type="number"
+                                className="form-input"
+                                min={50}
+                                value={joinDelay}
+                                onChange={(e) => setJoinDelay(Number(e.target.value))}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <button type="submit" className="btn-primary">
+                        🚀 Yeet Bots
+                    </button>
+                </form>
+
+                <div className="console-container">
+                    <div className="console-header">
+                        <h3>Console</h3>
+                        <div className="button-group">
+                            <button
+                                type="button"
+                                className={`btn-icon ${showConsole ? 'active' : ''}`}
+                                onClick={() => setShowConsole(!showConsole)}
+                                title="Toggle Console"
+                            >
+                                {showConsole ? '⬇️' : '⬆️'}
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-icon danger"
+                                onClick={handleStop}
+                                title="Stop Bots"
+                            >
+                                ⏹️
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-icon danger"
+                                onClick={handleLeave}
+                                title="Make All Bots Leave"
+                            >
+                                🏃
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-icon clear"
+                                onClick={() => setStatusText("")}
+                                title="Clear Console"
+                            >
+                                🚮
+                            </button>
+                        </div>
+                    </div>
+
+                    {showConsole && (
+                        <textarea
+                            className="console"
+                            rows={10}
+                            value={statusText}
+                            readOnly
+                            ref={statusRef}
+                        />
+                    )}
+                </div>
+
+                <button
+                    className="btn-settings"
+                    onClick={() => setSettingsOpen(!settingsOpen)}
+                >
+                    {settingsOpen ? '▲' : '▼'} Advanced Settings
+                </button>
+
+                {settingsOpen && (
+                    <div className="settings-panel">
+                        <h3>Naming Options</h3>
+                        <div className="radio-group">
+                            <label className="radio-option">
+                                <input
+                                    type="radio"
+                                    name="namingOption"
+                                    checked={namingOption === "prefix-number"}
+                                    onChange={() => setNamingOption("prefix-number")}
+                                />
+                                <span>Prefix + Number (Bot1, Bot2)</span>
+                            </label>
+                            <label className="radio-option">
+                                <input
+                                    type="radio"
+                                    name="namingOption"
+                                    checked={namingOption === "number-suffix"}
+                                    onChange={() => setNamingOption("number-suffix")}
+                                />
+                                <span>Number + Suffix (1Bot, 2Bot)</span>
+                            </label>
+                            <label className="radio-option">
+                                <input
+                                    type="radio"
+                                    name="namingOption"
+                                    checked={namingOption === "name-list"}
+                                    onChange={() => setNamingOption("name-list")}
+                                />
+                                <span>Custom Name List</span>
+                            </label>
+                        </div>
+
+                        {namingOption === "name-list" && (
+                            <div className="name-list-container">
+                                <textarea
+                                    className="name-list"
+                                    value={nameList}
+                                    onChange={(e) => setNameList(e.target.value)}
+                                    placeholder="Enter one name per line"
+                                />
+                                <div className="name-list-actions">
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={generateGenericNames}
+                                    >
+                                        Generic Names
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={generateFunnyNames}
+                                    >
+                                        Funny Names
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={generateKahootNames}
+                                    >
+                                        Kahoot Names
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <h3>Hydra Mode</h3>
+                        <div className="form-group">
+                            <label className="form-label">Rejoin Amount (when disconnected):</label>
+                            <input
+                                type="number"
+                                className="form-input"
+                                value={hydraAmount}
+                                onChange={(e) => {
+                                    const value = Number(e.target.value);
+                                    setHydraAmount(value);
+                                    setHydraEnabled(value > 0);
+                                }}
+                                min={0}
+                                max={500}
+                            />
+                        </div>
+                    </div>
+                )}
+            </main>
+        </div>
+        </>
+    );
+}
+
+export default App;
